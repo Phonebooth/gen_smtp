@@ -496,7 +496,7 @@ decode_body(Type, Body) ->
 	end.
 
 decode_base64(Body) ->
-	base64:mime_decode(Body).
+	base64_mime:mime_decode(Body).
 
 decode_quoted_printable(Body) ->
 	case binstr:strpos(Body, "\r\n") of

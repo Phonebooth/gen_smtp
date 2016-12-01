@@ -30,7 +30,9 @@
 % (overhead was measured to be 4 msec for a 92 KB base64 binary, when total
 % execution time was 8 msec)
 mime_decode(Bin) when is_binary(Bin) ->
-    mime_decode_binary_1(<<>>, Bin).
+    mime_decode_binary_1(<<>>, Bin);
+mime_decode(List) when is_list(List) ->
+    mime_decode(list_to_binary(List)).
 
 %% Skipping pad character if not at end of string. Also liberal about
 %% excess padding and skipping of other illegal (non-base64 alphabet)
