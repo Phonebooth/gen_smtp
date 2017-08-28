@@ -88,11 +88,11 @@ decode(OrigHeaders, Body, Options) ->
 					erlang:error(non_mime_multipart);
 				{Type, SubType, Parameters} ->
 					NewBody = decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
-						Body, proplists:get_value(<<"charset">>, Parameters), Encoding),
+						Body, proplists:get_value(<<"charset">>, Parameters), Encoding, Options),
 					{Type, SubType, Headers, Parameters, NewBody};
 				undefined ->
 					Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, <<"inline">>}, {<<"disposition-params">>, []}],
-					{<<"text">>, <<"plain">>, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
+					{<<"text">>, <<"plain">>, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body, Options)}
 			end;
 		Other ->
 			decode_component(Headers, Body, Other, Options)
@@ -171,7 +171,7 @@ tokenize_header(Value, Acc) ->
 						%% RFC 2047 #5. (3)
 						decode_quoted_printable(re:replace(Data, "_", " ", [{return, binary}, global]));
 					<<"b">> ->
-						decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]))
+						decode_base64(re:replace(Data, "_", " ", [{return, binary}, global]), [])
 				end,
 
 			%% iconv:close(CD),
@@ -265,12 +265,18 @@ decode_component(Headers, Body, MimeVsn, Options) when MimeVsn =:= <<"1.0">> ->
 		{Type, SubType, Parameters} ->
 			%io:format("body is ~s/~s~n", [Type, SubType]),
 			Parameters2 = [{<<"content-type-params">>, Parameters}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
-			{Type, SubType, Headers, Parameters2, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body, proplists:get_value(<<"charset">>, Parameters), proplists:get_value(encoding, Options, none))};
+			{Type, SubType, Headers, Parameters2, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
+                                                              Body,
+                                                              proplists:get_value(<<"charset">>, Parameters),
+                                                              proplists:get_value(encoding, Options, none),
+                                                              Options)};
 		undefined -> % defaults
 			Type = <<"text">>,
 			SubType = <<"plain">>,
 			Parameters = [{<<"content-type-params">>, [{<<"charset">>, <<"us-ascii">>}]}, {<<"disposition">>, Disposition}, {<<"disposition-params">>, DispositionParams}],
-			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers), Body)}
+			{Type, SubType, Headers, Parameters, decode_body(get_header_value(<<"Content-Transfer-Encoding">>, Headers),
+                                                             Body,
+                                                             Options)}
 	end;
 decode_component(_Headers, _Body, Other, _Options) ->
 	erlang:error({mime_version, Other}).
@@ -467,12 +473,12 @@ filter_non_ascii(C) when (C > 31 andalso C < 127); C == 9 ->
 filter_non_ascii(_C) ->
 	<<"?">>.
 
-decode_body(Type, Body, _InEncoding, none) ->
-	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
-decode_body(Type, Body, undefined, _OutEncoding) ->
-	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>);
-decode_body(Type, Body, InEncoding, OutEncoding) ->
-	NewBody = decode_body(Type, Body),
+decode_body(Type, Body, _InEncoding, none, Options) ->
+	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>, Options);
+decode_body(Type, Body, undefined, _OutEncoding, Options) ->
+	decode_body(Type, << <<X/integer>> || <<X>> <= Body, X < 128 >>, Options);
+decode_body(Type, Body, InEncoding, OutEncoding, Options) ->
+	NewBody = decode_body(Type, Body, Options),
 	InEncodingFixed = fix_encoding(InEncoding),
 	CD = case iconv:open(OutEncoding, InEncodingFixed) of
 		{ok, Res} -> Res;
@@ -482,21 +488,27 @@ decode_body(Type, Body, InEncoding, OutEncoding) ->
 	iconv:close(CD),
 	Result.
 
--spec decode_body(Type :: binary() | 'undefined', Body :: binary()) -> binary().
-decode_body(undefined, Body) ->
+-spec decode_body(Type :: binary() | 'undefined', Body :: binary(), Options :: list()) -> binary().
+decode_body(undefined, Body, _Options) ->
 	Body;
-decode_body(Type, Body) ->
+decode_body(Type, Body, Options) ->
 	case binstr:to_lower(Type) of
 		<<"quoted-printable">> ->
 			decode_quoted_printable(Body);
 		<<"base64">> ->
-			decode_base64(Body);
+			decode_base64(Body, Options);
 		_Other ->
 			Body
 	end.
 
-decode_base64(Body) ->
-	base64_mime:mime_decode(Body).
+decode_base64(Body, Options) ->
+    case proplists:get_value(decode_base64, Options) of
+        undefined ->
+	        base64_mime:mime_decode(Body);
+        {M, F} ->
+            % e.g. base64_native:mime_decode(Body)
+            erlang:apply(M, F, [Body])
+    end.
 
 decode_quoted_printable(Body) ->
 	case binstr:strpos(Body, "\r\n") of
@@ -1625,32 +1637,32 @@ decode_quoted_printable_test_() ->
 		{"out of range characters should be stripped",
 			fun() ->
 				% character 150 is en-dash in windows 1252
-				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ", 150, " bar">>, "US-ASCII", "UTF-8//IGNORE"))
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ", 150, " bar">>, "US-ASCII", "UTF-8//IGNORE", []))
 			end
 		},
 		{"out of range character in alternate charset should be converted",
 			fun() ->
 				% character 150 is en-dash in windows 1252
-				?assertEqual(<<"Foo ", 226, 128, 147, " bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, "Windows-1252", "UTF-8//IGNORE"))
+				?assertEqual(<<"Foo ", 226, 128, 147, " bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, "Windows-1252", "UTF-8//IGNORE", []))
 			end
 		},
 		{"out of range character in alternate charset with no destination encoding should be stripped",
 			fun() ->
 				% character 150 is en-dash in windows 1252
-				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, "Windows-1252", none))
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, "Windows-1252", none, []))
 			end
 		},
 		{"out of range character in alternate charset with no source encoding should be stripped",
 			fun() ->
 				% character 150 is en-dash in windows 1252
-				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, undefined, "UTF-8"))
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo ",150," bar">>, undefined, "UTF-8", []))
 			end
 		},
 		{"almost correct chatsets should work, eg. 'UTF8' instead of 'UTF-8'",
 			fun() ->
 				% character 150 is en-dash in windows 1252
-				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"UTF8">>, "UTF-8")),
-				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"utf8">>, "UTF-8"))
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"UTF8">>, "UTF-8", [])),
+				?assertEqual(<<"Foo  bar">>, decode_body(<<"quoted-printable">>, <<"Foo  bar">>, <<"utf8">>, "UTF-8", []))
 			end
 		}
 	].
