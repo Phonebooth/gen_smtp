@@ -24,7 +24,7 @@
 
 
 -define(TCP_LISTEN_OPTIONS,[  {active, false},
-                              {backlog, 30},
+                              {backlog, 200},
                               {ip,{0,0,0,0}},
                               {keepalive, true},
                               {packet, line},
@@ -32,7 +32,7 @@
 -define(TCP_CONNECT_OPTIONS,[ {active, false},
                               {packet, line}]).
 -define(SSL_LISTEN_OPTIONS, [ {active, false},
-                              {backlog, 30},
+                              {backlog, 200},
                               {certfile, "server.crt"},
                               {depth, 0},
                               {keepalive, true},
