@@ -164,7 +164,10 @@ handle_call(stop, _From, State) ->
 	{stop, normal, ok, State};
 
 handle_call(sessions, _From, State) ->
-	{reply, State#state.sessions, State};
+    Result = lists:map(fun({Pid, _Socket}) -> Pid;
+                                (Pid) -> Pid
+                             end, State#state.sessions),
+	{reply, Result, State};
 
 handle_call(Request, _From, State) ->
 	{reply, {unknown_call, Request}, State}.
@@ -191,7 +194,7 @@ handle_info({inet_async, ListenPort,_, {ok, ClientAcceptSocket}},
 			{ok, Pid} ->
 				link(Pid),
 				socket:controlling_process(ClientSocket, Pid),
-				CurSessions ++[Pid];
+				CurSessions ++[{Pid, ClientSocket}];
 			_Other ->
 				CurSessions
 		end,
@@ -205,8 +208,13 @@ handle_info({'EXIT', From, Reason}, State) ->
 		true ->
 			{noreply, State#state{sessions = lists:delete(From, State#state.sessions)}};
 		false ->
-			io:format("process ~p exited with reason ~p~n", [From, Reason]),
-			{noreply, State}
+            case proplists:get_value(From, State#state.sessions) of
+                undefined ->
+			        io:format("process ~p exited with reason ~p~n", [From, Reason]),
+			        {noreply, State};
+                _ ->
+                    {noreply, State#state{sessions = proplists:delete(From, State#state.sessions)}}
+            end
 	end;
 handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 	io:format("Client terminated connection with econnaborted~n"),
@@ -215,6 +223,17 @@ handle_info({inet_async, ListenSocket, _, {error, econnaborted}}, State) ->
 handle_info({inet_async, _ListenSocket,_, Error}, State) ->
 	error_logger:error_msg("Error in socket acceptor: ~p.~n", [Error]),
 	{stop, Error, State};
+handle_info({tcp_closed, Socket}, State=#state{sessions=Sessions}) ->
+    case lists:filter(fun({_Pid, Socket0}) when Socket0 =:= Socket -> true;
+                         (_) -> false
+                    end, Sessions) of
+        [{Pid, _}] ->
+            unlink(Pid),
+            exit(Pid, kill),
+            {noreply, State#state{sessions=proplists:delete(Pid, Sessions)}};
+        _ ->
+            {noreply, State}
+    end;
 handle_info(_Info, State) ->
 	{noreply, State}.
 
