@@ -114,7 +114,15 @@ start(Socket, Module, Options) ->
 -spec init(Args :: list()) -> {'ok', #state{}, ?TIMEOUT} | {'stop', any()} | 'ignore'.
 init([Socket, Module, Options]) ->
 	{ok, {PeerName, _Port}} = socket:peername(Socket),
-	case Module:init(proplists:get_value(hostname, Options, smtp_util:guess_FQDN()), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, [])) of
+    Fqdn = case application:get_env(gen_smtp, fqdn) of
+        {ok, V} ->
+            V;
+        _ ->
+            V = smtp_util:guess_FQDN(),
+            application:set_env(gen_smtp, fqdn, V),
+            V
+    end,
+	case Module:init(proplists:get_value(hostname, Options, Fqdn), proplists:get_value(sessioncount, Options, 0), PeerName, proplists:get_value(callbackoptions, Options, [])) of
 		{ok, Banner, CallbackState} ->
 			socket:send(Socket, ["220 ", Banner, "\r\n"]),
 			socket:active_once(Socket),
